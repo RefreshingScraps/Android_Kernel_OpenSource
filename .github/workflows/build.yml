@@ -120,6 +120,7 @@ jobs:
             bc binutils-dev bison build-essential ca-certificates ccache cmake curl file flex \
             git libelf-dev libssl-dev make ninja-build python3-dev texinfo u-boot-tools xz-utils \
             zlib1g-dev libncurses-dev wget zip cpio tree gcc clang lld llvm jq
+          mkdir -p "$TOOLCHAIN_DIR"
           cd "$TOOLCHAIN_DIR"
           wget -O python.tar.xz https://www.python.org/ftp/python/2.7.18/Python-2.7.18.tar.xz
           tar -xf python.tar.xz
