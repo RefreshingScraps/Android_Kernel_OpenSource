@@ -220,7 +220,7 @@ jobs:
           
           # 获取参数
           KSU="${{ github.event.inputs.kernelsu_variant }}"
-          VERSION="${{ github.event.inputs.kernel_version }}"
+          VERSION="${{ github.event.inputs.kernel_append_version }}"
           PRODUCT="${{ github.event.inputs.phone_product }}"
         
       - name: 生成设备配置
@@ -366,7 +366,7 @@ jobs:
 
 
       - name: 开启KVM相关配置
-        if: ${{ github.event.inputs.KVM = "true" }}
+        if: ${{ github.event.inputs.KVM == "true" }}
         run: |
             scripts/config --file out/.config \
               -e VIRTUALIZATION \
@@ -388,7 +388,7 @@ jobs:
           fi
 
       - name: 应用SUSFS补丁
-        if: ${{ github.event.inputs.SUSFS_CI = "true" }}
+        if: ${{ github.event.inputs.SUSFS_CI == "true" }}
         run: |
           scripts/config --file out/.config \
               -e KSU_SUSFS \
@@ -422,7 +422,7 @@ jobs:
           echo "完成"
                   
       - name: 判断KPM是否启用并开启相关配置
-        if:  ${{ "$KSU" == "SukiSU-Ultra" || github.event.inputs.KPM  = "true" }}
+        if:  ${{ github.event.inputs.kernelsu_variant == "SukiSU-Ultra" || github.event.inputs.KPM  == "true" }}
         run: |
           echo "🔧 Enabling KPM Configuration... (开启 KPM 配置)"
           scripts/config --file out/.config \
