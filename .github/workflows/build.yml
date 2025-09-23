@@ -17,14 +17,7 @@ on:
           - 'RKSU'
           - 'KernelSU'
           - 'None'
-      kpm_enable:
-        description: 'Is KPM support enabled? (是否启用 KPM 支持?)'
-        required: true
-        type: choice
-        default: 'enable'
-        options:
-          - 'enable'
-          - 'disable'
+
       kernel_version:
         description: 'Customizing the kernel version number (自定义内核版本号)'
         required: false
@@ -38,6 +31,32 @@ on:
         options:
           - 'Release'
           - 'Dev'
+          
+      SUSFS_CI:
+        type: boolean
+        description: "下载SUSFS模块是否使用CI构建？"
+        required: true
+        default: true
+      VFS:
+        type: boolean
+        description: "是否启用手动钩子？"
+        required: true
+        default: true
+      KPM:
+        type: boolean
+        description: "是否启用KPM？"
+        required: true
+        default: true
+      KVM:
+        type: boolean
+        description: "是否启用KVM？（可能与KPM冲突）"
+        required: true
+        default: true
+      ZRAM:
+        type: boolean
+        description: "是否启用添加更多的ZRAM算法？"
+        required: true
+        default: false
 
 jobs:
 
@@ -79,7 +98,7 @@ jobs:
           sudo apt install -y \
             bc binutils-dev bison build-essential ca-certificates ccache cmake curl file flex \
             git libelf-dev libssl-dev make ninja-build python3-dev texinfo u-boot-tools xz-utils \
-            zlib1g-dev libncurses-dev wget zip cpio python3 python3-pip tree gcc clang lld llvm jq
+            zlib1g-dev libncurses-dev wget zip cpio python2 python2-pip tree gcc clang lld llvm jq
           echo "✅ Dependency installation complete (依赖安装完成)"
           
       - name: ⚙️ Configuring ccache (配置 ccache)
@@ -122,8 +141,6 @@ jobs:
           echo "正在下载编译工具链..."
           # 创建工具链目录
           mkdir -p "$TOOLCHAIN_DIR/clang"
-          mkdir -p "$TOOLCHAIN_DIR/gcc/gcc64"
-          mkdir -p "$TOOLCHAIN_DIR/gcc/gcc32"
           
           # 下载 Clang
           echo "正在下载 Clang..."
@@ -134,17 +151,12 @@ jobs:
           
           # 下载 GCC
           echo "正在下载 GCC工具链..."
-          cd "$TOOLCHAIN_DIR/gcc/gcc64"
-          git init
-          git remote add origin https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9.git
-          git fetch --depth 1 origin
-          git checkout FETCH_HEAD
+          cd "$TOOLCHAIN_DIR/gcc/"
+          wget -O gcc64.tar.xz https://releases.linaro.org/components/toolchain/binaries/latest-7/aarch64-linux-gnu/gcc-linaro-7.5.0-2019.12-x86_64_aarch64-linux-gnu.tar.xz
+          tar -xf gcc64.tar.xz
           
-          cd "$TOOLCHAIN_DIR/gcc/gcc32"
-          git init
-          git remote add origin https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9.git
-          git fetch --depth 1 origin
-          git checkout FETCH_HEAD
+          wget -O gcc32.tar.xz https://releases.linaro.org/components/toolchain/binaries/latest-7/arm-linux-gnueabi/gcc-linaro-7.5.0-2019.12-x86_64_arm-linux-gnueabi.tar.xz
+          tar -xf gcc32.tar.xz
           
           echo "✅ Toolchain download complete (工具链下载完成)"
 
@@ -157,7 +169,7 @@ jobs:
           echo "⚙️ Configure KernelSU Variants: $KSU_VARIANT (配置 KernelSU 变体: $KSU_VARIANT)"
           
           if [ "$KSU_VARIANT" == "SukiSU-Ultra" ]; then
-            curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s susfs-main
+            curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s susfs-dev
           elif [ "$KSU_VARIANT" == "RKSU" ]; then
             curl -LSs "https://raw.githubusercontent.com/rsuntk/KernelSU/susfs-v1.5.5/kernel/setup.sh" | bash -s susfs-v1.5.5
           elif [ "$KSU_VARIANT" == "KernelSU" ]; then
@@ -177,9 +189,9 @@ jobs:
           
           # 定义构建参数
           MAKE_ARGS="ARCH=arm64 SUBARCH=arm64 LLVM=1 LLVM_IAS=1 \
-            CROSS_COMPILE=$TOOLCHAIN_DIR/gcc/gcc64/bin/aarch64-linux-android- \
-            CROSS_COMPILE_COMPAT=$TOOLCHAIN_DIR/gcc/gcc32/bin/arm-linux-androideabi- \
-            CROSS_COMPILE_ARM32=$TOOLCHAIN_DIR/gcc/gcc32/bin/arm-linux-androideabi- \
+            CROSS_COMPILE=$TOOLCHAIN_DIR/gcc/gcc-linaro-7.5.0-2019.12-x86_64_aarch64-linux-gnu/bin/aarch64-linux-android- \
+            CROSS_COMPILE_COMPAT=$TOOLCHAIN_DIR/gcc/gcc-linaro-7.5.0-2019.12-x86_64_arm-linux-gnueabi/bin/arm-linux-androideabi- \
+            CROSS_COMPILE_ARM32=$TOOLCHAIN_DIR/gcc/gcc-linaro-7.5.0-2019.12-x86_64_arm-linux-gnueabi/bin/arm-linux-androideabi- \
             CLANG_TRIPLE=aarch64-linux-gnu- \
             LD=ld.lld HOSTLD=ld.lld \
             KCFLAGS=-Wno-error \
