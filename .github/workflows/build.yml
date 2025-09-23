@@ -7,6 +7,12 @@ permissions:
 on:
   workflow_dispatch:
     inputs:
+      branch-names:
+        description: '分支名称:'
+        required: true
+        type: string
+        default: ''
+        
       kernelsu_variant:
         description: 'KernelSU variants (KernelSU 版本)'
         required: true
@@ -89,14 +95,9 @@ jobs:
       DEVICE: "${{ github.event.inputs.phone_product }}"
 
     steps:
-      - name: 获取分支名称
-        id: branch-names
-        uses: tj-actions/branch-names@v8
-        
       - name: 📢 Build Information (构建信息)
         run: |
-          ls /home/runner/work/
-          echo "系统：${{ steps.branch-names.outputs.current_branch }}"
+          echo "系统：${{ github.event.inputs.branch-names }}"
           echo "KernelSU变体: ${{ github.event.inputs.kernelsu_variant }} | KPM: ${{ github.event.inputs.KPM }}"
           echo "构建类型: ${{ github.event.inputs.build_type }}"
 
@@ -142,7 +143,7 @@ jobs:
       - name: 📥 Cloning kernel source code （克隆内核源码）
         run: |
           echo "正在克隆内核源码..."
-          git clone https://github.com/RefreshingScraps/Kernel_OpenSource --depth=1 $KERNEL_SOURCE
+          git clone https://github.com/RefreshingScraps/Kernel_OpenSource -b ${{ github.event.inputs.branch-names }} --depth=1 $KERNEL_SOURCE
           echo "✅ Kernel source code cloning complete (内核源码克隆完成)"
 
       - name: 📥 Caching toolchain (缓存工具链)
