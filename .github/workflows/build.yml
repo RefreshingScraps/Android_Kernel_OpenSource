@@ -156,7 +156,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.TOOLCHAIN_DIR }}
+          key: neutron-clang-${{ hashFiles('**/*.sh') }}
           restore-keys: |
+            neutron-clang-
             toolchain-
             
       - name: 📥 Download the compilation toolchain (下载编译工具链)
