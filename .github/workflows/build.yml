@@ -122,7 +122,7 @@ jobs:
             zlib1g-dev libncurses-dev wget zip cpio tree gcc clang lld llvm jq
           mkdir -p "$TOOLCHAIN_DIR"
           cd "$TOOLCHAIN_DIR"
-          wget -O python.tar.xz https://www.python.org/ftp/python/2.7.18/Python-2.7.18.tar.xz
+          wget --quiet -O python.tar.xz https://www.python.org/ftp/python/2.7.18/Python-2.7.18.tar.xz
           tar -xf python.tar.xz
           rm python.tar.xz
           echo "✅ Dependency installation complete (依赖安装完成)"
@@ -177,11 +177,12 @@ jobs:
           
           # 下载 GCC
           echo "正在下载 GCC工具链..."
-          cd "$TOOLCHAIN_DIR/gcc/"
-          wget -O gcc64.tar.xz https://releases.linaro.org/components/toolchain/binaries/latest-7/aarch64-linux-gnu/gcc-linaro-7.5.0-2019.12-x86_64_aarch64-linux-gnu.tar.xz
+          mkdir -p "$TOOLCHAIN_DIR/gcc"
+          cd "$TOOLCHAIN_DIR/gcc"
+          wget --quiet -O gcc64.tar.xz https://releases.linaro.org/components/toolchain/binaries/latest-7/aarch64-linux-gnu/gcc-linaro-7.5.0-2019.12-x86_64_aarch64-linux-gnu.tar.xz
           tar -xf gcc64.tar.xz
           rm gcc64.tar.xz
-          wget -O gcc32.tar.xz https://releases.linaro.org/components/toolchain/binaries/latest-7/arm-linux-gnueabi/gcc-linaro-7.5.0-2019.12-x86_64_arm-linux-gnueabi.tar.xz
+          wget --quiet -O gcc32.tar.xz https://releases.linaro.org/components/toolchain/binaries/latest-7/arm-linux-gnueabi/gcc-linaro-7.5.0-2019.12-x86_64_arm-linux-gnueabi.tar.xz
           tar -xf gcc32.tar.xz
           rm gcc32.tar.xz
           
