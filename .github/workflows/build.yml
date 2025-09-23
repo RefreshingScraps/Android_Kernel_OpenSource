@@ -6,8 +6,6 @@ permissions:
 
 on:
   workflow_dispatch:
-    branches:
-      - '!README'
     inputs:
       kernelsu_variant:
         description: 'KernelSU variants (KernelSU 版本)'
@@ -20,13 +18,30 @@ on:
           - 'KernelSU'
           - 'None'
           
-      kernel_version:
-        description: 'Customizing the kernel version number (自定义内核版本号)'
-        required: false
+      phone_product:
+        description: '设备 product'
+        required: true
         type: string
         default: ''
-        
+
       kernel_version:
+        type: choice
+        description: "内核版本"
+        required: true
+        default: gki-android12-5.10
+        options:
+          - kernel-5.4
+          - kernel-4.19
+          - kernel-4.14
+          - kernel-4.9
+          - gki-android12-5.10
+          - gki-android13-5.10
+          - gki-android13-5.15
+          - gki-android14-5.15
+          - gki-android14-6.1
+          - gki-android15-6.6
+          
+      kernel_append_version:
         description: 'Customizing the kernel version number (自定义内核版本号)'
         required: false
         type: string
@@ -45,11 +60,7 @@ on:
         description: "下载SUSFS模块是否使用CI构建？"
         required: true
         default: true
-      VFS:
-        type: boolean
-        description: "是否启用手动钩子？"
-        required: true
-        default: true
+        
       KPM:
         type: boolean
         description: "是否启用KPM？"
@@ -60,11 +71,6 @@ on:
         description: "是否启用KVM？（可能与KPM冲突）"
         required: true
         default: true
-      ZRAM:
-        type: boolean
-        description: "是否启用添加更多的ZRAM算法？"
-        required: true
-        default: false
 
 jobs:
 
@@ -80,12 +86,18 @@ jobs:
       WORKDIR: "${{ github.workspace }}"
       KERNEL_SOURCE: "${{ github.workspace }}/kernel_source"
       TOOLCHAIN_DIR: "${{ github.workspace }}/toolchain"
-      DEVICE: "${{ matrix.device }}"
+      DEVICE: "${{ github.event.inputs.phone_product }}"
 
     steps:
+      - name: 获取分支名称
+        id: branch-names
+        uses: tj-actions/branch-names@v8
+        
       - name: 📢 Build Information (构建信息)
         run: |
-          echo "KernelSU变体: ${{ github.event.inputs.kernelsu_variant }} | KPM: ${{ github.event.inputs.kpm_enable }}"
+          ls /home/runner/work/
+          echo "系统：${{ steps.branch-names.outputs.current_branch }}"
+          echo "KernelSU变体: ${{ github.event.inputs.kernelsu_variant }} | KPM: ${{ github.event.inputs.KPM }}"
           echo "构建类型: ${{ github.event.inputs.build_type }}"
 
       - name: 🚀 Maximize build space (最大化构建空间)
@@ -138,9 +150,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.TOOLCHAIN_DIR }}
-          key: toolchain-clang-r547379-gcc-${{ hashFiles('**/*.sh') }}
+          # key: toolchain-clang-r547379-gcc-${{ hashFiles('**/*.sh') }}
           restore-keys: |
-            toolchain-clang-r547379-gcc-
+            # toolchain-clang-r547379-gcc-
             toolchain-
             
       - name: 📥 Download the compilation toolchain (下载编译工具链)
@@ -188,7 +200,7 @@ jobs:
           
           echo "✅ KernelSU configuration complete (KernelSU 配置完成)"
           
-      - name: 🔨 Build the kernel (构建内核)
+      - name: 设置构建环境
         run: |
           cd "$KERNEL_SOURCE"
           
@@ -207,19 +219,20 @@ jobs:
           
           # 获取参数
           KSU="${{ github.event.inputs.kernelsu_variant }}"
-          KPM="${{ github.event.inputs.kpm_enable }}"
           VERSION="${{ github.event.inputs.kernel_version }}"
+          PRODUCT="${{ github.event.inputs.phone_product }}"
+        
+      - name: 生成设备配置
+        run: |
+          echo "🔧 Generating ${PRODUCT} configuration... (正在生成 ${PRODUCT} 的配置)"
+          make $MAKE_ARGS -j$(nproc --all) ${PRODUCT}_user_defconfig
           
-          # 生成设备配置
-          echo "🔧 Generating ${DEVICE} configuration... (正在生成 ${DEVICE} 的配置)"
-          make $MAKE_ARGS -j$(nproc --all) ${DEVICE}_defconfig
-          
-          # 开启一些附加优化配置
+      - name: 开启一些附加优化配置
+        run: |
           echo "🔧 Applying basic optimized configurations... (应用基本优化配置)"
           scripts/config --file out/.config \
             -e KALLSYMS \
             -e KALLSYMS_ALL \
-            -e KPROBES \
             -e HAVE_KPROBES \
             -e KPROBE_EVENTS \
             -e TMPFS_XATTR=y \
@@ -318,87 +331,109 @@ jobs:
             -e LRU_GEN \
             -e LRU_GEN_ENABLED
             
-          # 根据系统类型修改配置
-          if [ "$SYSTEM" == "MIUI" ]; then
-              echo "🔧 Apply MIUI specific configurations... (应用 MIUI 特定配置)"
-              scripts/config --file out/.config \
-                  --set-str STATIC_USERMODEHELPER_PATH /system/bin/micd \
-                  -e PERF_CRITICAL_RT_TASK \
-                  -e SF_BINDER \
-                  -e OVERLAY_FS \
-                  -d DEBUG_FS \
-                  -e MIGT \
-                  -e MIGT_ENERGY_MODEL \
-                  -e MIHW \
-                  -e PACKAGE_RUNTIME_INFO \
-                  -e BINDER_OPT \
-                  -e KPERFEVENTS \
-                  -e MILLET \
-                  -e PERF_HUMANTASK \
-                  -d LTO_CLANG \
-                  -d LOCALVERSION_AUTO \
-                  -e SF_BINDER \
-                  -e XIAOMI_MIUI \
-                  -d MI_MEMORY_SYSFS \
-                  -e TASK_DELAY_ACCT \
-                  -e MIUI_ZRAM_MEMORY_TRACKING \
-                  -d CONFIG_MODULE_SIG_SHA512 \
-                  -d CONFIG_MODULE_SIG_HASH \
-                  -e MI_FRAGMENTION \
-                  -e PERF_HELPER \
-                  -e BOOTUP_RECLAIM \
-                  -e MI_RECLAIM \
-                  -e RTMM
-          fi
-
-          echo "应用其他配置……"
+      - name: 根据系统类型修改配置
+        run: |
+          echo "🔧 Apply MIUI specific configurations... (应用 MIUI 特定配置)"
           scripts/config --file out/.config \
-            -e VIRTUALIZATION \
-            -e KVM \
-            -e KVM_MMIO \
-            -e KVM_ARM_HOST \
+            --set-str STATIC_USERMODEHELPER_PATH /system/bin/micd \
+            -e PERF_CRITICAL_RT_TASK \
+            -e SF_BINDER \
+            -e OVERLAY_FS \
+            -d DEBUG_FS \
+            -e MIGT \
+            -e MIGT_ENERGY_MODEL \
+            -e MIHW \
+            -e PACKAGE_RUNTIME_INFO \
+            -e BINDER_OPT \
+            -e KPERFEVENTS \
+            -e MILLET \
+            -e PERF_HUMANTASK \
+            -d LTO_CLANG \
+            -d LOCALVERSION_AUTO \
+            -e SF_BINDER \
+            -e XIAOMI_MIUI \
+            -d MI_MEMORY_SYSFS \
+            -e TASK_DELAY_ACCT \
+            -e MIUI_ZRAM_MEMORY_TRACKING \
+            -d CONFIG_MODULE_SIG_SHA512 \
+            -d CONFIG_MODULE_SIG_HASH \
+            -e MI_FRAGMENTION \
+            -e PERF_HELPER \
+            -e BOOTUP_RECLAIM \
+            -e MI_RECLAIM \
+            -e RTMM
+
+
+      - name: 开启KVM相关配置
+        if: ${{ github.event.inputs.KVM = "true" }}
+        run: |
+            scripts/config --file out/.config \
+              -e VIRTUALIZATION \
+              -e KVM \
+              -e KVM_MMIO \
+              -e KVM_ARM_HOST
           
-          # 根据 KernelSU 变体修改配置
+      - name: 根据 KernelSU 变体修改配置
+        run: |
           if [ "$KSU" == "SukiSU-Ultra" ] || [ "$KSU" == "RKSU" ]; then
               echo "🔧 Applying SukiSU-Ultra & RKSU Configuration... (应用 SukiSU-Ultra & RKSU 配置)"
               scripts/config --file out/.config \
                   -e KSU \
                   -e KSU_MANUAL_HOOK \
-                  -e KSU_SUSFS \
-                  -e KSU_SUSFS_HAS_MAGIC_MOUNT \
-                  -e KSU_SUSFS_SUS_PATH \
-                  -e KSU_SUSFS_SUS_MOUNT \
-                  -e KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT \
-                  -e KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT \
-                  -e KSU_SUSFS_SUS_KSTAT \
-                  -d KSU_SUSFS_SUS_OVERLAYFS \
-                  -e KSU_SUSFS_TRY_UMOUNT \
-                  -e KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT \
-                  -e KSU_SUSFS_SPOOF_UNAME \
-                  -e KSU_SUSFS_ENABLE_LOG \
-                  -e KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
-                  -e KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
-                  -e KSU_SUSFS_OPEN_REDIRECT \
-                  -d KSU_SUSFS_SUS_SU
           elif [ "$KSU" == "KernelSU" ]; then
               echo "🔧 Applying KernelSU Configuration... (应用 KernelSU 配置)"
               scripts/config --file out/.config \
                   -e KSU
           fi
-            
-          # 判断KPM是否启用并开启相关配置
-          if [ "$KSU" == "SukiSU-Ultra" ] && [ "$KPM" == "enable" ]; then
-              echo "🔧 Enabling KPM Configuration... (开启 KPM 配置)"
-              scripts/config --file out/.config \
-                  -e KPM
-          fi
-            
-          # 修改内核版本号
+
+      - name: 应用SUSFS补丁
+        if: ${{ github.event.inputs.SUSFS_CI = "true" }}
+        run: |
+          scripts/config --file out/.config \
+              -e KSU_SUSFS \
+              -e KSU_SUSFS_HAS_MAGIC_MOUNT \
+              -e KSU_SUSFS_SUS_PATH \
+              -e KSU_SUSFS_SUS_MOUNT \
+              -e KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT \
+              -e KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT \
+              -e KSU_SUSFS_SUS_KSTAT \
+              -d KSU_SUSFS_SUS_OVERLAYFS \
+              -e KSU_SUSFS_TRY_UMOUNT \
+              -e KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT \
+              -e KSU_SUSFS_SPOOF_UNAME \
+              -e KSU_SUSFS_ENABLE_LOG \
+              -e KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
+              -e KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
+              -e KSU_SUSFS_OPEN_REDIRECT \
+              -d KSU_SUSFS_SUS_SU
+          cd "$WORKDIR"
+          git clone https://gitlab.com/simonpunk/susfs4ksu.git -b ${{ github.event.inputs.kernel_version }}
+          git clone https://github.com/RefreshingScraps/SukiSU_patch.git
+          cd "$KERNEL_SOURCE"
+          echo "正在给内核打susfs补丁"
+          cp ../susfs4ksu/kernel_patches/50_add_susfs_in_${{ github.event.inputs.kernel_version }}.patch ./common/
+          cp ../susfs4ksu/kernel_patches/fs/* ./common/fs/
+          cp ../susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
+
+
+          cd ./common
+          patch -p1 < 50_add_susfs_in_${{ github.event.inputs.kernel_version }}.patch || true
+          echo "完成"
+                  
+      - name: 判断KPM是否启用并开启相关配置
+        if:  ${{ "$KSU" == "SukiSU-Ultra" || github.event.inputs.KPM  = "true" }}
+        run: |
+          echo "🔧 Enabling KPM Configuration... (开启 KPM 配置)"
+          scripts/config --file out/.config \
+              -e KPM
+          
+      - name: 修改内核版本号
+        run: |
           if [ ! -z "$VERSION" ]; then
               echo "🔧 设置自定义内核版本: $VERSION"
               sed -i "s/-dirty/-$VERSION/g" scripts/setlocalversion
           else
-              echo "🔧 使用默认版本后缀: \"\""
+              sed -i "s/-dirty/$VERSION/g" scripts/setlocalversion
           fi
 
           FULL_VERSION="$VERSION"
@@ -536,12 +571,13 @@ jobs:
           cd "$dir"
         for zip_file in *; do
           if [[ -f "$zip_file" && "$zip_file" == *.zip ]]; then
-          mv "$zip_file" /home/runner/work/kernel_xiaomi_sm8250_mod/kernel_xiaomi_sm8250_mod/release
+          mkdir -p /home/runner/work/release
+          mv "$zip_file" /home/runner/work/release
         fi
           done
           cd ..
         done
-        TARGET_DEVICES=$(echo "${device_list[*]}" | tr ' ' '-')
+        TARGET_DEVICES=${{ github.event.inputs.phone_product }}
         echo "TARGET_DEVICES=$TARGET_DEVICES" >> $GITHUB_ENV
 
     - name: 📅 Setting date variables (设置日期变量)
@@ -554,30 +590,10 @@ jobs:
     - name: 📤 Post to Release (发布到 Release)
       uses: softprops/action-gh-release@v1
       with:
-        files: /home/runner/work/kernel_xiaomi_sm8250_mod/kernel_xiaomi_sm8250_mod/release/*.zip
-        name: Kernel_（${{ env.TARGET_DEVICES }}）_${{ github.event.inputs.kernelsu_variant }}_${{ github.event.inputs.compiled_system }}_${{ env.RELEASE_DATE }}_${{ env.GIT_COMMIT_ID }}_${{ github.event.inputs.build_type }}
-        tag_name: Kernel_（${{ env.TARGET_DEVICES }}）_${{ github.event.inputs.kernelsu_variant }}_${{ github.event.inputs.compiled_system }}_${{ env.RELEASE_DATE }}_${{ env.GIT_COMMIT_ID }}
+        files: /home/runner/work/release/*.zip
+        name: Kernel_（${{ env.TARGET_DEVICES }}）_${{ github.event.inputs.kernelsu_variant }}_${{ github.event.inputs.phone_product }}_${{ env.RELEASE_DATE }}_${{ env.GIT_COMMIT_ID }}_${{ github.event.inputs.build_type }}
+        tag_name: Kernel_（${{ env.TARGET_DEVICES }}）_${{ github.event.inputs.kernelsu_variant }}_${{ github.event.inputs.phone_product }}_${{ env.RELEASE_DATE }}_${{ env.GIT_COMMIT_ID }}
         body: |
-          ## 📱kernel build information | 内核构建信息
-      
-          ### 🌐 英文 | English
-          - **Target Device:** ${{ env.TARGET_DEVICES }}
-          - **Compiled System:** ${{ github.event.inputs.compiled_system }}
-          - **KernelSU Variant:** ${{ github.event.inputs.kernelsu_variant }}
-          - **KPM Support:** ${{ github.event.inputs.kpm_enable }}
-          - **Build Type:** ${{ github.event.inputs.build_type }}
-          - **Build Date:** ${{ env.RELEASE_DATE }}
-          - **Commit ID:** ${{ env.GIT_COMMIT_ID }}
-      
-          ### 🇨🇳 中文 | Chinese
-          - **目标机型:** ${{ env.TARGET_DEVICES }}
-          - **适用系统:** ${{ github.event.inputs.compiled_system }}
-          - **KernelSU变体:** ${{ github.event.inputs.kernelsu_variant }}
-          - **KPM支持:** ${{ github.event.inputs.kpm_enable }}
-          - **构建类型:** ${{ github.event.inputs.build_type }}
-          - **构建日期:** ${{ env.RELEASE_DATE }}
-          - **提交ID:** ${{ env.GIT_COMMIT_ID }}
-      
           ### 📋 安装说明 | Installation Guide
           1. 下载对应机型的刷机包
           2. 进入Recovery模式
