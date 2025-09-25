@@ -1,16 +1,16 @@
 name: Prefix All Branches
-permissions:
-  contents: write
-  actions: write
 on:
   workflow_dispatch:
     inputs:
       prefix:
         description: '要添加的前缀'
         required: true
-        default: 'aaaaaaa-'
+        default: 'Xiaomi_'
         type: string
 
+permissions:
+  contents: write
+  actions: write
 
 jobs:
   prefix-branches:
@@ -38,39 +38,46 @@ jobs:
           fi
           echo "使用前缀: $PREFIX"
 
-      - name: Get all remote branches
-        id: get-branches
+      - name: Get and process branches
+        id: process-branches
         run: |
-          # 获取所有远程分支，排除HEAD指针
+          # 获取所有远程分支
           git fetch --all --prune
-          branches=$(git branch -r | grep -v 'HEAD' | sed 's/origin\///' | tr -d ' ' | sort -u)
           
-          # 过滤掉已经带有前缀的分支
-          filtered_branches=""
-          for branch in $branches; do
-            if [[ ! "$branch" =~ ^$PREFIX ]] && [[ ! "$branch" =~ ^(main|master|gh-pages)$ ]]; then
-              filtered_branches="$filtered_branches $branch"
+          # 获取默认分支
+          DEFAULT_BRANCH=$(git remote show origin | grep 'HEAD branch' | cut -d' ' -f5)
+          echo "默认分支: $DEFAULT_BRANCH"
+          
+          # 获取所有远程分支名称
+          git branch -r | grep -v 'HEAD' | sed 's/origin\///' | tr -d ' ' > all_branches.txt
+          
+          # 过滤分支：排除默认分支和已包含前缀的分支
+          branches_to_process=()
+          while IFS= read -r branch; do
+            if [[ "$branch" != "$DEFAULT_BRANCH" && ! "$branch" =~ ^$PREFIX ]]; then
+              branches_to_process+=("$branch")
             fi
-          done
+          done < all_branches.txt
           
-          # 将分支列表转换为JSON数组格式
-          branches_json=$(echo $filtered_branches | jq -R -s -c 'split(" ") | map(select(. != ""))')
-          echo "branches=$branches_json" >> $GITHUB_OUTPUT
-          echo "即将处理的分支: $filtered_branches"
+          # 显示将要处理的分支
+          echo "将要处理的分支数量: ${#branches_to_process[@]}"
+          printf '%s\n' "${branches_to_process[@]}"
+          
+          # 保存分支列表到文件，供后续步骤使用
+          printf '%s\n' "${branches_to_process[@]}" > branches_to_process.txt
 
       - name: Preview changes
         run: |
           echo "=== 分支重命名预览 ==="
-          branches='${{ steps.get-branches.outputs.branches }}'
-          eval "branch_array=$branches"
-          
-          for branch in "${branch_array[@]}"; do
-            new_branch="${PREFIX}${branch}"
-            echo "📝 $branch → $new_branch"
-          done
-          echo "总计: ${#branch_array[@]} 个分支将被重命名"
+          while IFS= read -r branch; do
+            if [[ -n "$branch" ]]; then
+              new_branch="${PREFIX}${branch}"
+              echo "📝 $branch → $new_branch"
+            fi
+          done < branches_to_process.txt
+          echo "总计: $(wc -l < branches_to_process.txt) 个分支将被重命名"
 
-      - name: Confirm and rename branches
+      - name: Rename branches
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -80,16 +87,14 @@ jobs:
           DEFAULT_BRANCH=$(git remote show origin | grep 'HEAD branch' | cut -d' ' -f5)
           echo "默认分支: $DEFAULT_BRANCH (将被跳过)"
           
-          branches='${{ steps.get-branches.outputs.branches }}'
-          eval "branch_array=$branches"
-          
-          if [ ${#branch_array[@]} -eq 0 ]; then
-            echo "✅ 没有需要重命名的分支"
-            exit 0
-          fi
-          
           renamed_count=0
-          for branch in "${branch_array[@]}"; do
+          error_count=0
+          
+          while IFS= read -r branch; do
+            if [[ -z "$branch" ]]; then
+              continue
+            fi
+            
             # 跳过默认分支
             if [[ "$branch" == "$DEFAULT_BRANCH" ]]; then
               echo "⏭️  跳过默认分支: $branch"
@@ -98,38 +103,61 @@ jobs:
             
             new_branch="${PREFIX}${branch}"
             
+            echo "🔄 处理分支: $branch → $new_branch"
+            
             # 检查新分支是否已存在
             if git show-ref --verify --quiet "refs/heads/$new_branch"; then
               echo "⚠️  目标分支已存在，跳过: $new_branch"
               continue
             fi
             
-            echo "🔄 处理分支: $branch → $new_branch"
+            # 检查旧分支是否存在
+            if ! git show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+              echo "❌ 源分支不存在: $branch"
+              error_count=$((error_count + 1))
+              continue
+            fi
             
             # 创建新分支并推送
-            git checkout -b "$new_branch" "origin/$branch"
-            git push origin "$new_branch"
+            if git checkout -b "$new_branch" "origin/$branch"; then
+              if git push origin "$new_branch"; then
+                echo "✅ 成功创建分支: $new_branch"
+                renamed_count=$((renamed_count + 1))
+                
+                # 可选：删除旧分支（谨慎操作！）
+                # echo "🗑️  删除旧分支: $branch"
+                # git push origin --delete "$branch"
+              else
+                echo "❌ 推送新分支失败: $new_branch"
+                error_count=$((error_count + 1))
+              fi
+            else
+              echo "❌ 创建新分支失败: $new_branch"
+              error_count=$((error_count + 1))
+            fi
             
-            # 可选：删除旧分支（谨慎操作）
-            # git push origin --delete "$branch"
-            
-            renamed_count=$((renamed_count + 1))
-            echo "✅ 已完成: $new_branch"
-          done
+          done < branches_to_process.txt
           
           # 切换回默认分支
           git checkout "$DEFAULT_BRANCH"
-          echo "🎉 分支重命名完成！总计处理: $renamed_count 个分支"
+          echo "🎉 分支重命名完成！"
+          echo "✅ 成功处理: $renamed_count 个分支"
+          echo "❌ 失败: $error_count 个分支"
+
+      - name: Cleanup
+        run: |
+          rm -f all_branches.txt branches_to_process.txt
 
       - name: Create summary
         run: |
-          branches='${{ steps.get-branches.outputs.branches }}'
-          eval "branch_array=$branches"
           echo "## 分支重命名操作完成" >> $GITHUB_STEP_SUMMARY
           echo "**前缀:** \`$PREFIX\`" >> $GITHUB_STEP_SUMMARY
-          echo "**处理分支数量:** ${#branch_array[@]}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 重命名详情:" >> $GITHUB_STEP_SUMMARY
-          for branch in "${branch_array[@]}"; do
-            echo "- \`$branch\` → \`${PREFIX}${branch}\`" >> $GITHUB_STEP_SUMMARY
-          done
+          echo "### 处理详情:" >> $GITHUB_STEP_SUMMARY
+          if [[ -f branches_to_process.txt ]]; then
+            while IFS= read -r branch; do
+              if [[ -n "$branch" ]]; then
+                echo "- \`$branch\` → \`${PREFIX}${branch}\`" >> $GITHUB_STEP_SUMMARY
+              fi
+            done < branches_to_process.txt
+          fi
