@@ -1,0 +1,209 @@
+name: Cleanup Non-Prefixed Branches
+on:
+  workflow_dispatch:
+    inputs:
+      prefix:
+        description: '要保留的分支前缀'
+        required: true
+        default: 'Xiaomi_'
+        type: string
+      dry_run:
+        description: '试运行模式（只显示将要删除的分支，不实际执行）'
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  cleanup-branches:
+    name: Cleanup non-prefixed branches
+    runs-on: ubuntu-latest
+    env:
+      PREFIX: ${{ github.event.inputs.prefix }}
+      DRY_RUN: ${{ github.event.inputs.dry_run }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Validate environment
+        run: |
+          echo "前缀: $PREFIX"
+          echo "试运行模式: $DRY_RUN"
+          
+          if [[ -z "$PREFIX" ]]; then
+            echo "错误：前缀不能为空"
+            exit 1
+          fi
+
+      - name: Fetch all branches and identify targets for deletion
+        id: identify-branches
+        run: |
+          # 获取所有远程分支
+          git fetch --all --prune
+          
+          # 获取默认分支
+          DEFAULT_BRANCH=$(git remote show origin | grep 'HEAD branch' | cut -d' ' -f5)
+          echo "默认分支: $DEFAULT_BRANCH"
+          echo "default_branch=$DEFAULT_BRANCH" >> $GITHUB_OUTPUT
+          
+          # 获取所有远程分支名称
+          git branch -r | grep -v 'HEAD' | sed 's/origin\///' | tr -d ' ' > all_branches.txt
+          
+          # 识别需要删除的分支（没有指定前缀且不是默认分支）
+          branches_to_delete=()
+          while IFS= read -r branch; do
+            if [[ "$branch" != "$DEFAULT_BRANCH" && ! "$branch" =~ ^$PREFIX ]]; then
+              branches_to_delete+=("$branch")
+            fi
+          done < all_branches.txt
+          
+          echo "识别到需要删除的分支数量: ${#branches_to_delete[@]}"
+          
+          # 保存到文件供后续步骤使用
+          printf '%s\n' "${branches_to_delete[@]}" > branches_to_delete.txt
+          
+          # 显示将要删除的分支
+          if [[ ${#branches_to_delete[@]} -gt 0 ]]; then
+            echo "将要删除的分支:"
+            printf '  - %s\n' "${branches_to_delete[@]}"
+          else
+            echo "没有找到需要删除的分支"
+          fi
+
+      - name: Preview deletion plan
+        run: |
+          echo "=== 分支删除预览 ==="
+          echo "模式: $([ "$DRY_RUN" == "true" ] && echo "试运行（不会实际删除）" || echo "实际执行")"
+          echo "保留前缀: $PREFIX"
+          echo ""
+          
+          if [[ ! -f branches_to_delete.txt ]] || [[ ! -s branches_to_delete.txt ]]; then
+            echo "✅ 没有需要删除的分支"
+            exit 0
+          fi
+          
+          echo "以下分支将被删除:"
+          while IFS= read -r branch; do
+            if [[ -n "$branch" ]]; then
+              echo "🗑️  $branch"
+            fi
+          done < branches_to_delete.txt
+          echo ""
+          echo "总计: $(wc -l < branches_to_delete.txt) 个分支"
+
+      - name: Delete branches (if not dry run)
+        if: inputs.dry_run == 'false'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          echo "=== 开始删除分支 ==="
+          
+          if [[ ! -f branches_to_delete.txt ]] || [[ ! -s branches_to_delete.txt ]]; then
+            echo "没有需要删除的分支"
+            exit 0
+          fi
+          
+          DEFAULT_BRANCH="${{ steps.identify-branches.outputs.default_branch }}"
+          deleted_count=0
+          failed_deletions=()
+          
+          while IFS= read -r branch; do
+            if [[ -z "$branch" ]]; then
+              continue
+            fi
+            
+            # 再次确认不是默认分支
+            if [[ "$branch" == "$DEFAULT_BRANCH" ]]; then
+              echo "⚠️  跳过默认分支: $branch"
+              continue
+            fi
+            
+            # 确认分支存在
+            if ! git show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+              echo "⚠️  分支不存在，跳过: $branch"
+              continue
+            fi
+            
+            echo "🗑️  删除分支: $branch"
+            
+            # 执行删除操作
+            if git push origin --delete "$branch"; then
+              echo "✅ 成功删除分支: $branch"
+              deleted_count=$((deleted_count + 1))
+            else
+              echo "❌ 删除分支失败: $branch"
+              failed_deletions+=("$branch")
+            fi
+            
+          done < branches_to_delete.txt
+          
+          # 记录失败情况
+          if [[ ${#failed_deletions[@]} -gt 0 ]]; then
+            printf '%s\n' "${failed_deletions[@]}" > deletion_failures.txt
+          fi
+          
+          echo "删除操作完成: 成功 $deleted_count 个分支"
+
+      - name: Dry run notice
+        if: inputs.dry_run == 'true'
+        run: |
+          echo "=== 试运行模式 ==="
+          echo "这是在试运行模式下，没有实际删除任何分支。"
+          echo "如果要实际执行删除，请将 dry_run 参数设置为 false。"
+          echo ""
+          echo "将要删除的分支列表已在上面的步骤中显示。"
+
+      - name: Create summary report
+        run: |
+          echo "## 分支清理操作报告" >> $GITHUB_STEP_SUMMARY
+          echo "**操作模式:** $([ "$DRY_RUN" == "true" ] && echo "试运行" || echo "实际执行")" >> $GITHUB_STEP_SUMMARY
+          echo "**保留前缀:** \`$PREFIX\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ -f branches_to_delete.txt ]] && [[ -s branches_to_delete.txt ]]; then
+            branch_count=$(wc -l < branches_to_delete.txt)
+            
+            if [[ "$DRY_RUN" == "true" ]]; then
+              echo "### 📋 试运行结果 ($branch_count 个分支将被删除)" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "### 🗑️  删除结果 ($branch_count 个分支计划删除)" >> $GITHUB_STEP_SUMMARY
+            fi
+            
+            while IFS= read -r branch; do
+              if [[ -n "$branch" ]]; then
+                echo "- \`$branch\`" >> $GITHUB_STEP_SUMMARY
+              fi
+            done < branches_to_delete.txt
+            echo "" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### ✅ 没有需要删除的分支" >> $GITHUB_STEP_SUMMARY
+            echo "所有分支都已具有前缀 \`$PREFIX\` 或是默认分支。" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # 显示失败情况
+          if [[ -f deletion_failures.txt ]] && [[ -s deletion_failures.txt ]]; then
+            failure_count=$(wc -l < deletion_failures.txt)
+            echo "### ❌ 删除失败的分支 ($failure_count 个)" >> $GITHUB_STEP_SUMMARY
+            while IFS= read -r branch; do
+              if [[ -n "$branch" ]]; then
+                echo "- \`$branch\`" >> $GITHUB_STEP_SUMMARY
+              fi
+            done < deletion_failures.txt
+          fi
+          
+          if [[ "$DRY_RUN" == "true" ]] && [[ -f branches_to_delete.txt ]] && [[ -s branches_to_delete.txt ]]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "> 💡 这是在试运行模式下。要实际执行删除，请重新运行工作流并将 \`dry_run\` 参数设置为 \`false\`。" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Cleanup temporary files
+        run: |
+          rm -f all_branches.txt branches_to_delete.txt deletion_failures.txt 2>/dev/null || true
