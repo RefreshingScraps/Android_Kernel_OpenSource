@@ -1,9 +1,135 @@
-
-name: Build Kernel
+name: Prefix All Branches
 permissions:
   contents: write
   actions: write
-
 on:
   workflow_dispatch:
+    inputs:
+      prefix:
+        description: '要添加的前缀'
+        required: true
+        default: 'aaaaaaa-'
+        type: string
 
+
+jobs:
+  prefix-branches:
+    name: Add prefix to branches
+    runs-on: ubuntu-latest
+    env:
+      PREFIX: ${{ github.event.inputs.prefix }}
+    
+    steps:
+      - name: Checkout repository with full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Validate prefix
+        run: |
+          if [[ -z "$PREFIX" ]]; then
+            echo "错误：前缀不能为空"
+            exit 1
+          fi
+          if [[ ! "$PREFIX" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+            echo "错误：前缀只能包含字母、数字、下划线和连字符"
+            exit 1
+          fi
+          echo "使用前缀: $PREFIX"
+
+      - name: Get all remote branches
+        id: get-branches
+        run: |
+          # 获取所有远程分支，排除HEAD指针
+          git fetch --all --prune
+          branches=$(git branch -r | grep -v 'HEAD' | sed 's/origin\///' | tr -d ' ' | sort -u)
+          
+          # 过滤掉已经带有前缀的分支
+          filtered_branches=""
+          for branch in $branches; do
+            if [[ ! "$branch" =~ ^$PREFIX ]] && [[ ! "$branch" =~ ^(main|master|gh-pages)$ ]]; then
+              filtered_branches="$filtered_branches $branch"
+            fi
+          done
+          
+          # 将分支列表转换为JSON数组格式
+          branches_json=$(echo $filtered_branches | jq -R -s -c 'split(" ") | map(select(. != ""))')
+          echo "branches=$branches_json" >> $GITHUB_OUTPUT
+          echo "即将处理的分支: $filtered_branches"
+
+      - name: Preview changes
+        run: |
+          echo "=== 分支重命名预览 ==="
+          branches='${{ steps.get-branches.outputs.branches }}'
+          eval "branch_array=$branches"
+          
+          for branch in "${branch_array[@]}"; do
+            new_branch="${PREFIX}${branch}"
+            echo "📝 $branch → $new_branch"
+          done
+          echo "总计: ${#branch_array[@]} 个分支将被重命名"
+
+      - name: Confirm and rename branches
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e  # 遇到错误立即退出
+          
+          # 获取默认分支
+          DEFAULT_BRANCH=$(git remote show origin | grep 'HEAD branch' | cut -d' ' -f5)
+          echo "默认分支: $DEFAULT_BRANCH (将被跳过)"
+          
+          branches='${{ steps.get-branches.outputs.branches }}'
+          eval "branch_array=$branches"
+          
+          if [ ${#branch_array[@]} -eq 0 ]; then
+            echo "✅ 没有需要重命名的分支"
+            exit 0
+          fi
+          
+          renamed_count=0
+          for branch in "${branch_array[@]}"; do
+            # 跳过默认分支
+            if [[ "$branch" == "$DEFAULT_BRANCH" ]]; then
+              echo "⏭️  跳过默认分支: $branch"
+              continue
+            fi
+            
+            new_branch="${PREFIX}${branch}"
+            
+            # 检查新分支是否已存在
+            if git show-ref --verify --quiet "refs/heads/$new_branch"; then
+              echo "⚠️  目标分支已存在，跳过: $new_branch"
+              continue
+            fi
+            
+            echo "🔄 处理分支: $branch → $new_branch"
+            
+            # 创建新分支并推送
+            git checkout -b "$new_branch" "origin/$branch"
+            git push origin "$new_branch"
+            
+            # 可选：删除旧分支（谨慎操作）
+            # git push origin --delete "$branch"
+            
+            renamed_count=$((renamed_count + 1))
+            echo "✅ 已完成: $new_branch"
+          done
+          
+          # 切换回默认分支
+          git checkout "$DEFAULT_BRANCH"
+          echo "🎉 分支重命名完成！总计处理: $renamed_count 个分支"
+
+      - name: Create summary
+        run: |
+          branches='${{ steps.get-branches.outputs.branches }}'
+          eval "branch_array=$branches"
+          echo "## 分支重命名操作完成" >> $GITHUB_STEP_SUMMARY
+          echo "**前缀:** \`$PREFIX\`" >> $GITHUB_STEP_SUMMARY
+          echo "**处理分支数量:** ${#branch_array[@]}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 重命名详情:" >> $GITHUB_STEP_SUMMARY
+          for branch in "${branch_array[@]}"; do
+            echo "- \`$branch\` → \`${PREFIX}${branch}\`" >> $GITHUB_STEP_SUMMARY
+          done
